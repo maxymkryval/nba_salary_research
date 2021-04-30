@@ -1,0 +1,207 @@
+```{r}
+install.packages("glmnet")
+install.packages("ggplot2")
+install.packages("usdm")
+install.packages("reshape")
+install.packages("lmtest")
+install.packages("corrplot")
+library(glmnet)
+library(ggplot2)
+library(usdm)
+library(corrplot)
+library(reshape)
+library(lmtest)
+```
+
+
+```{r}
+# Reading data
+data <- read.csv('NBA_stats_salary_2019-2020.csv')
+head(data)
+```
+
+
+```{r}
+# showing multicollinearity
+explanatory_vars <- subset(data, select = -c(Player, Pos, Tm, X, Age, Pick))
+
+check <- usdm::vif(explanatory_vars)
+ggplot(data = check, aes(seq(1, nrow(check)), VIF)) + geom_line(col = 'red') + theme(axis.title.x = element_blank(),axis.text.x=element_blank(),
+        axis.ticks.x=element_blank())
+```
+
+
+```{r}
+# showing correlation beween percentages/rates
+rates <- subset(data, select = c(X3PAr, FTr, FG., X3P., X2P., eFG., FT., TS., Salary))
+
+correlation_matrix <- round(cor(rates), 2)
+melted <- melt(correlation_matrix)
+ggplot(data = melted, aes(x=X1, y=X2, fill=value)) + geom_tile() + geom_text(aes(X1, X2, label = value), color = "black", size = 2) +  scale_fill_gradient2(low = "blue", high = "red", mid = "white", 
+   midpoint = 0, limit = c(-1,1), space = "Lab", 
+   name="Pearson\nCorrelation")
+```
+
+
+```{r}
+# showing correlation between shooting measures
+point_stats <- subset(data, select = c(FG, FGA, X3P, X3PA, X2P, X2PA, FT, FTA, PTS, Salary))
+correlation_matrix <- round(cor(point_stats), 2)
+melted <- melt(correlation_matrix)
+ggplot(data = melted, aes(x=X1, y=X2, fill=value)) + geom_tile() + geom_text(aes(X1, X2, label = value), color = "black", size = 2) +  scale_fill_gradient2(low = "blue", high = "red", mid = "white", 
+   midpoint = 0, limit = c(-1,1), space = "Lab", 
+   name="Pearson\nCorrelation")
+point_stats_vif <- usdm::vif(point_stats)
+point_stats_vif
+```
+
+
+```{r}
+# showing correlation between efficiency measures
+efficiency_measures <- subset(data, select = c(PER, OWS, DWS, WS, WS.48, OBPM, 
+                                               DBPM, BPM, VORP, USG., PTS))
+
+conclusion_data <- subset(data, select = -c(X3PAr, FTr, FG., X3P., X2P., eFG.,
+                                            FT., TS., FG, FGA, X3P, X3PA, X2P,
+                                            X2PA, FT, FTA, Pos, Tm, X, STL, TOV,
+                                            PER, OWS, DWS, WS, WS.48, OBPM, DBPM,
+                                            BPM, VORP, USG., Player, ORB., DRB.,
+                                            TRB., AST., STL., BLK., TOV., MP))
+
+needed_data <- subset(conclusion_data, select = -c(Age, Pick))
+check <- usdm::vif(needed_data)
+check
+
+```
+
+```{r}
+# running theoretically appropriate and naive model
+explanatory_vars$Salary <- data$Salary
+
+naive_model <- lm(Salary ~ ., data = explanatory_vars)
+model <- lm(Salary ~ ., data = needed_data)
+summary(naive_model)
+summary(model)
+
+```
+
+
+```{r}
+# Linear relationship
+plot(model, which = 1)
+
+# Normal distribution of error term
+plot(model, which = 2)
+
+# Multicollinearity
+check <- usdm::vif(needed_data)
+check
+
+# Heteroskedasticity: Breusch-Pagan Test
+lmtest::bptest(model)
+```
+
+
+```{r}
+# log transforming data
+log_data <- log(needed_data)
+log_model <- lm(Salary ~ ., data = log_data)
+
+summary(log_model)
+```
+
+
+```{r}
+# Checking assumptions for transformed data
+plot(log_model, 1)
+
+plot(log_model, 2)
+
+check <- usdm::vif(log_data)
+check
+
+lmtest::bptest(log_model)
+car::ncvTest(log_model)
+
+```
+
+
+```{r}
+# running Ridge, Lasso and Linear regressions
+n <- nrow(needed_data)
+train_rows <- sample(1:n, 0.66*n)
+
+x <- subset(log_data, select = -c(Salary))
+y <- subset(log_data, select = c(Salary))
+train <- log_data[train_rows, ]
+test <- log_data[-train_rows, ]
+
+x.train <- data.matrix(x[train_rows, ])
+y.train <- data.matrix(y[train_rows, ])
+
+x.test <- data.matrix(x[-train_rows, ])
+y.test <- data.matrix(y[-train_rows, ])
+
+alpha0.fit <- cv.glmnet(x.train, y.train, type.measure = 'mse', alpha = 0, family = 'gaussian')
+ridge_predicted <- predict(alpha0.fit, s = alpha0.fit$lambda.min, newx = x.test)
+ridge_rmse <- mean(sqrt((exp(y.test) - exp(ridge_predicted))^2))
+
+alpha1.fit <- cv.glmnet(x.train, y.train, type.measure = 'mse', alpha = 1, family = 'gaussian')
+lasso_predicted <- predict(alpha1.fit, s = alpha0.fit$lambda.min, newx = x.test)
+lasso_rmse <- mean(sqrt((exp(y.test) - exp(lasso_predicted))^2))
+
+basic <- lm(Salary ~ ., data = train)
+basic_predicted <- predict(basic, newdata = test)
+basic_rmse <- mean(sqrt((exp(y.test) - exp(basic_predicted))^2))
+
+cat("RMSE for Ridge, Lasso, and LM models respectively:\n")
+ridge_rmse
+lasso_rmse
+basic_rmse
+```
+
+
+```{r}
+# Giving example of a model with just adding age and pick
+conclusion_model <- lm(Salary ~ ., data = conclusion_data)
+summary(conclusion_model)
+```
+
+
+```{r}
+# running the models with Age and Pick
+n <- nrow(needed_data)
+train_rows <- sample(1:n, 0.66*n)
+
+x <- subset(conclusion_data, select = -c(Salary))
+y <- subset(conclusion_data, select = c(Salary))
+train <- conclusion_data[train_rows, ]
+test <- conclusion_data[-train_rows, ]
+
+x.train <- data.matrix(x[train_rows, ])
+y.train <- data.matrix(y[train_rows, ])
+
+x.test <- data.matrix(x[-train_rows, ])
+y.test <- data.matrix(y[-train_rows, ])
+
+alpha0.fit <- cv.glmnet(x.train, y.train, type.measure = 'mse', alpha = 0, family = 'gaussian')
+ridge_predicted <- predict(alpha0.fit, s = alpha0.fit$lambda.min, newx = x.test)
+ridge_rmse <- mean(sqrt((y.test - ridge_predicted)^2))
+
+alpha1.fit <- cv.glmnet(x.train, y.train, type.measure = 'mse', alpha = 1, family = 'gaussian')
+lasso_predicted <- predict(alpha1.fit, s = alpha0.fit$lambda.min, newx = x.test)
+lasso_rmse <- mean(sqrt((y.test - lasso_predicted)^2))
+
+basic <- lm(Salary ~ ., data = train)
+basic_predicted <- predict(basic, newdata = test)
+basic_rmse <- mean(sqrt((y.test - basic_predicted)^2))
+
+cat("RMSE for Ridge, Lasso, and LM models respectively:\n")
+ridge_rmse
+lasso_rmse
+basic_rmse
+```
+
+
+
+
